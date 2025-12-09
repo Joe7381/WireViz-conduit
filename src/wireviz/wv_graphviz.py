@@ -13,6 +13,7 @@ from wireviz.wv_dataclasses import (
     ArrowWeight,
     Cable,
     Component,
+    Conduit,
     Connector,
     MateComponent,
     MatePin,
@@ -158,6 +159,8 @@ def calculate_node_bgcolor(component, harness_options):
         return component.bgcolor.html
     elif isinstance(component, Connector) and harness_options.bgcolor_connector:
         return harness_options.bgcolor_connector.html
+    elif isinstance(component, Conduit) and harness_options.bgcolor_conduit:
+        return harness_options.bgcolor_conduit.html
     elif (
         isinstance(component, Cable)
         and component.category == "bundle"
