@@ -12,6 +12,7 @@ if __name__ == "__main__":
 import wireviz.wireviz as wv
 from wireviz import APP_NAME, __version__
 from wireviz.wv_utils import file_read_text
+from wireviz.wv_utils import file_read_text
 
 format_codes = {
     # "c": "csv",  # TODO: support CSV

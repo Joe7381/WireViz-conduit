@@ -16,6 +16,8 @@ from wireviz.wv_dataclasses import (
     ArrowWeight,
     Cable,
     Component,
+    Conduit,
+    ConduitConnector,
     Connector,
     MateComponent,
     MatePin,
@@ -52,7 +54,9 @@ class Harness:
 
     def __post_init__(self):
         self.connectors = {}
+        self.conduit_connectors = {}
         self.cables = {}
+        self.conduits = {}
         self.mates = []
         self.bom = defaultdict(dict)
         self.additional_bom_items = []
@@ -62,9 +66,17 @@ class Harness:
         conn = Connector(designator=designator, *args, **kwargs)
         self.connectors[designator] = conn
 
+    def add_conduit_connector(self, designator: str, *args, **kwargs) -> None:
+        conn = ConduitConnector(designator=designator, *args, **kwargs)
+        self.conduit_connectors[designator] = conn
+
     def add_cable(self, designator: str, *args, **kwargs) -> None:
         cbl = Cable(designator=designator, *args, **kwargs)
         self.cables[designator] = cbl
+
+    def add_conduit(self, designator: str, *args, **kwargs) -> None:
+        cdt = Conduit(designator=designator, *args, **kwargs)
+        self.conduits[designator] = cdt
 
     def add_additional_bom_item(self, item: dict) -> None:
         new_item = AdditionalBomItem(**item)
@@ -91,7 +103,9 @@ class Harness:
         # helper lists
         all_toplevel_items = (
             list(self.connectors.values())
+            + list(self.conduit_connectors.values())
             + list(self.cables.values())
+            + list(self.conduits.values())
             + self.additional_bom_items
         )
         all_subitems = [
@@ -101,7 +115,9 @@ class Harness:
         ]
         all_bom_relevant_items = (
             list(self.connectors.values())
+            + list(self.conduit_connectors.values())
             + [cable for cable in self.cables.values() if cable.category != "bundle"]
+            + [conduit for conduit in self.conduits.values()]
             + [
                 wire
                 for cable in self.cables.values()
@@ -163,11 +179,15 @@ class Harness:
         if isinstance(item, TopLevelGraphicalComponent):
             if isinstance(item, Connector):
                 cat = BomCategory.CONNECTOR
+            elif isinstance(item, ConduitConnector):
+                cat = BomCategory.CONNECTOR
             elif isinstance(item, Cable):
                 if item.category == "bundle":
                     cat = BomCategory.WIRE
                 else:
                     cat = BomCategory.CABLE
+            elif isinstance(item, Conduit):
+                cat = BomCategory.CABLE
             else:
                 cat = ""
 
@@ -230,11 +250,16 @@ class Harness:
         via_wire: Union[int, str],
         to_name: str,
         to_pin: Union[int, str],
+        conduits: List[str] = None,
     ) -> None:
+        conduits = conduits or []
+
+        def get_connector(name):
+            return self.connectors.get(name) or self.conduit_connectors.get(name)
         # check from and to connectors
         for name, pin in zip([from_name, to_name], [from_pin, to_pin]):
-            if name is not None and name in self.connectors:
-                connector = self.connectors[name]
+            if name is not None and get_connector(name):
+                connector = get_connector(name)
                 # check if provided name is ambiguous
                 if pin in connector.pins and pin in connector.pinlabels:
                     if connector.pins.index(pin) != connector.pinlabels.index(pin):
@@ -286,27 +311,35 @@ class Harness:
 
         # perform the actual connection
         if from_name is not None:
-            from_con = self.connectors[from_name]
+            from_con = get_connector(from_name)
             from_pin_obj = from_con.pin_objects[from_pin]
         else:
             from_pin_obj = None
         if to_name is not None:
-            to_con = self.connectors[to_name]
+            to_con = get_connector(to_name)
             to_pin_obj = to_con.pin_objects[to_pin]
         else:
             to_pin_obj = None
 
         self.cables[via_name]._connect(from_pin_obj, via_wire, to_pin_obj)
-        if from_name in self.connectors:
-            self.connectors[from_name].activate_pin(from_pin, Side.RIGHT)
-        if to_name in self.connectors:
-            self.connectors[to_name].activate_pin(to_pin, Side.LEFT)
+        # register conduit membership and ports
+        self.cables[via_name].conduits = conduits
+        for conduit_name in conduits:
+            conduit = self.conduits.get(conduit_name)
+            if conduit:
+                wire_obj = self.cables[via_name].wire_objects[via_wire]
+                conduit.register_port(via_name, via_wire, wire_obj.color)
+
+        if from_name in self.connectors or from_name in self.conduit_connectors:
+            get_connector(from_name).activate_pin(from_pin, Side.RIGHT)
+        if to_name in self.connectors or to_name in self.conduit_connectors:
+            get_connector(to_name).activate_pin(to_pin, Side.LEFT)
 
     def create_graph(self) -> Graph:
         dot = Graph()
         set_dot_basics(dot, self.options)
 
-        for connector in self.connectors.values():
+        for connector in {**self.connectors, **self.conduit_connectors}.values():
             # generate connector node
             gv_html = gv_node_component(connector)
             gv_html.update_attribs(
@@ -359,6 +392,21 @@ class Harness:
                     dot.edge(l1, l2)
                 if not (r1, r2) == (None, None):
                     dot.edge(r1, r2)
+
+            # indicate conduit membership visually
+            for conduit_name in getattr(cable, "conduits", []) or []:
+                if conduit_name in self.conduits:
+                    dot.edge(cable.designator, conduit_name, style="dotted")
+
+        for conduit in self.conduits.values():
+            gv_html = gv_node_component(conduit)
+            gv_html.update_attribs(bgcolor=self.options.bgcolor_conduit.html)
+            dot.node(
+                conduit.designator,
+                label=f"<\n{gv_html}\n>",
+                shape="box",
+                style="dotted",
+            )
 
         for mate in self.mates:
             color, dir, code_from, code_to = gv_edge_mate(mate)

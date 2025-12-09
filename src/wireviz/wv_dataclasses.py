@@ -83,6 +83,7 @@ class Options:
     bgcolor_connector: SingleColor = None
     bgcolor_cable: SingleColor = None
     bgcolor_bundle: SingleColor = None
+    bgcolor_conduit: SingleColor = None
     color_output_mode: ColorOutputMode = ColorOutputMode.EN_UPPER
     mini_bom_mode: bool = True
     template_separator: str = "."
@@ -97,6 +98,7 @@ class Options:
         self.bgcolor_connector = SingleColor(self.bgcolor_connector)
         self.bgcolor_cable = SingleColor(self.bgcolor_cable)
         self.bgcolor_bundle = SingleColor(self.bgcolor_bundle)
+        self.bgcolor_conduit = SingleColor(self.bgcolor_conduit)
 
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
@@ -106,6 +108,8 @@ class Options:
             self.bgcolor_cable = self.bgcolor_node
         if not self.bgcolor_bundle:
             self.bgcolor_bundle = self.bgcolor_cable
+        if not self.bgcolor_conduit:
+            self.bgcolor_conduit = self.bgcolor_cable or self.bgcolor_node
 
 
 @dataclass
@@ -818,6 +822,79 @@ class MatePin:
     from_: PinClass
     to: PinClass
     arrow: Arrow
+
+
+@dataclass
+class ConduitConnector(Connector):
+    pass
+
+
+@dataclass
+class Conduit(Cable):
+    """A protective conduit that can host one or more cables.
+
+    Ports are assigned on demand when a cable wire is routed through the conduit.
+    """
+
+    # Cables routed through this conduit
+    cables: List[str] = field(default_factory=list)
+    # Map (cable_name, wire_id) -> conduit port number
+    _port_map: Dict[tuple, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Allow conduits without predefined wires; set a harmless default
+        if not self.wirecount and not self.colors:
+            self.colors = [""]
+            self.wirecount = 1
+            _used_default = True
+        else:
+            _used_default = False
+
+        super().__post_init__()
+
+        if _used_default:
+            # reset to empty so ports are added lazily
+            self.wire_objects = {}
+            self.colors = []
+            self.wirecount = 0
+
+        # distinguish conduits in BOM/graph if desired
+        if not self.category:
+            self.category = "conduit"
+
+    def register_port(self, cable_name: str, wire_id: Union[int, str], wire_color):
+        key = (cable_name, wire_id)
+        if key in self._port_map:
+            return self._port_map[key]
+
+        port_number = len(self._port_map) + 1
+        self._port_map[key] = port_number
+
+        # normalize color input: accept string, SingleColor, MultiColor
+        if isinstance(wire_color, MultiColor):
+            mc = wire_color
+        else:
+            mc = MultiColor(wire_color)
+
+        # create a visible wire entry for rendering
+        self.wire_objects[port_number] = WireClass(
+            parent=self.designator,
+            index=port_number - 1,
+            id=port_number,
+            label=None,
+            color=mc,
+            type=self.type,
+            subtype=self.subtype,
+            gauge=self.gauge,
+            length=self.length,
+            sum_amounts_in_bom=self.sum_amounts_in_bom,
+            ignore_in_bom=self.ignore_in_bom,
+            partnumbers=None,
+        )
+
+        self.colors.append(str(wire_color) if wire_color else "")
+        self.wirecount = len(self.wire_objects)
+        return port_number
 
 
 @dataclass
